@@ -1,0 +1,111 @@
+---
+title: "Auckland Cycle analysis"
+author: "Lawrence May"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Total number of cyclists counted for each day, with rainfall.
+
+```{r}
+library(tidyverse)
+
+#Read in bike data
+bike_files<- list.files("/Users/lawrence/Google Drive/UNI/current/Stats 369/a1/",pattern=".csv",full=TRUE)
+bike_data<-map(bike_files,read_csv)
+
+#Join into one dataframe
+bike_data <- dplyr::bind_rows(bike_data[[1]],bike_data[[2]],bike_data[[3]])
+
+bike <- subset(bike_data, select = -c(Date))
+bike[is.na(bike)] <- 0
+
+#Take sum of all cyclists on each day
+bike<-rowSums(bike)
+bike_data <- data.frame(bike_data$Date,bike)
+bike_data %>% rename(Date = bike_data.Date, Count = bike) -> bikes
+
+#Read in rain data
+rain_files<- list.files("/Users/lawrence/Google Drive/UNI/current/Stats 369/a1/",pattern=".txt",full=TRUE)
+rain_data<-map(rain_files,read_csv,skip=9)
+
+#Join into one dataframe
+rain <- dplyr::bind_rows(rain_data[[1]],rain_data[[2]])
+rain %>% filter(Station == 22719) -> rain1
+rain %>% filter(Station == 37852) -> rain2
+
+#Aggregate daily rainfall for each locationn
+aggregate(rain1$`Amount(mm)` ~ rain1$`Date(NZST)`, data=rain1, FUN=sum)  -> rain1
+aggregate(rain2$`Amount(mm)` ~ rain2$`Date(NZST)`, data=rain2, FUN=sum)  -> rain2
+
+colnames(rain1) <- c("Date", "Rain")
+colnames(rain2) <- c("Date", "Rain")
+rain <- rbind(rain1,rain2)
+
+#Take average of daily rain in Mangere and Albany to get approximation for average rainfall across Auckland
+aggregate(Rain ~ Date, data=rain, FUN=mean)  -> rain
+
+bikes %>% separate(col=Date, into=c("dow","day","month","year")) %>% unite(Date,c(day,month,year), sep = " ",remove = FALSE) %>% select(-c(day)) -> bikes
+
+#Change date to same format and join on date
+bikes$Date <- as.Date(bikes$Date, format='%d %b %Y')
+rain$Date <- as.Date(as.character(rain$Date), format='%Y%m%d')
+combined_df <- inner_join(bikes,rain,by = 'Date')
+head(combined_df)
+```
+
+Some graphical analysis
+
+```{r}
+#Create season factor variable
+spring <- c("Sep", "Oct", "Nov")
+summer <- c("Dec", "Jan", "Feb")
+autumn <- c("Mar", "Apr", "May")
+winter <- c("Jun", "Jul", "Aug")
+
+#Insert into dataframe 
+combined_df <- mutate(combined_df, season = factor(case_when(month %in% spring ~ "spring",
+                                             month %in% summer ~ "summer", month %in% autumn ~ "autumn",
+                                             month %in% winter ~ "winter",
+                                             TRUE                ~ NA_character_)))
+
+ggplot(combined_df, aes(Date, Count, color = season)) + geom_point()+ggtitle("Number of cyclists over time and by season")
+```
+There appears to be an increasing trend of the number of cyclists over time, with a strong seasonal component (higher number of cyclist in spring and summer).
+
+
+```{r}
+ggplot(combined_df, aes(season, Count, color = Rain)) + geom_boxplot()+ggtitle("Number of cyclists by season and rain") + geom_point()
+```
+
+There is a strong seasonal pattern with most cyclists in the summer, spring and autumn months and far less in the winter months. Rain does appear to have a negative effect as well, and seems to be able to explain many of the negative outliers (light blue = heavy rain).
+
+
+```{r}
+combined_df$dow<-factor(combined_df$dow , levels=c('Mon','Tue','Wed','Thu','Fri','Sat','Sun'))
+ggplot(combined_df, aes(dow, Count, color = Rain)) + geom_boxplot()+ggtitle("Number of cyclists by day of the week and rain")+ geom_point()
+```
+There also appears to be a Day of the week effect, with most cyclists riding on Tuesdays and the least amount of Saturdays.
+
+```{r}
+ggplot(combined_df, aes(Rain, Count)) + ggtitle("Number of cyclists and the effect of rain")+ geom_point() + geom_boxplot()
+```
+More rain leads to less than average number of cyclists.
+
+
+Simple regression model to estimate number of cyclists and effect of rain on cycle activity 
+
+```{r}
+combined_df$year <- as.numeric(combined_df$year)
+bike.lm <- lm(Count ~ year + season + dow + Rain, data = combined_df)
+summary(bike.lm)
+```
+
+There is a highly significant effect of year on cyclists, the number of cyclists increases by 1500 every year, on average. There is also a strong seasonal effect, most notably of winter which decreases the number of cyclists by 2400 compared to the baseline autumn. As expected by the graph, there is also a strong effect of day of the week, most notably Tuesday which, on average, has 1400 cyclists more than a typical Monday.
+
+Based on the model, rain does have a large, and highly significant, effect on people cycling in Auckland: each additional millimeter of rain precipitation per day resulted in 225 people less cycling per day. This can be seen in the graphs as well: On days with higher than usual precipitation (i.e more than 40mm) the count of people cycling is significantly less than what is usually the case in that month.
